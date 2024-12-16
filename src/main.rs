@@ -8,6 +8,9 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use hyper::{Method, StatusCode};
+use http_body_util::{combinators::BoxBody, BodyExt};
+use hyper::header::HeaderValue;
 
 
 #[tokio::main]
@@ -19,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let io = TokioIo::new(stream);
         tokio::task::spawn(async move {
             if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(hello))
+                .serve_connection(io, service_fn(catch_all))
                 .await
             {
                 eprintln!("Error serving connection: {:?}", err);
@@ -28,7 +31,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-    Ok(Response::new(Full::new(Bytes::from("Hello, World!"))))
+// function to catch all incoming requests
+async fn catch_all(req: Request<hyper::body::Incoming>) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    match req.uri().path() {
+        "/" => {
+            match req.method() {
+                &Method::GET => {
+                    let mut res = Response::new(box_response("<h1>Hello, World!</h1>"));
+                    res.headers_mut().insert("Content-Type", HeaderValue::from_static("text/html"));
+                    return Ok(res)
+                },
+                _ => {
+                    let mut invalid_method = Response::new(box_response("invalid method"));
+                    *invalid_method.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
+                    return Ok(invalid_method)
+                }
+            }
+
+        },
+        _ => {
+            let mut not_found = Response::new(box_response("<h1>404 not found</h1>"));
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            not_found.headers_mut().insert("Content-Type", HeaderValue::from_static("text/html"));
+            return Ok(not_found)
+        }
+    }
 }
 
+// utility function to box up our response body
+fn box_response<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
+    Full::new(chunk.into())
+        .map_err(|never| match never {})
+        .boxed()
+}
